@@ -1,5 +1,5 @@
 
-#### The project joins and harmonizes data to give a monthly overview of payment rails performance and scalability through of 5 Key metrics below:
+#### The project joins and harmonizes data from different datasets to give a monthly overview of payment rails performance and scalability through of 5 Key metrics below:
 
 1. latency_accuracy: the delta between predictedt and actual_at timestamps to score our estimation model.
 
