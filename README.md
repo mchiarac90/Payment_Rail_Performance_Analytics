@@ -1,5 +1,5 @@
 
-#### The project joins and harmonizes data from different datasets to give a monthly overview of payment rails performance and scalability for 3 ccy through of 5 Key metrics below:
+#### The project joins and harmonizes data from different datasets to give a monthly overview of payment rails performance and scalability for 3 ccy through 5 Key metrics below:
 
 1.  rejection rate: perc of insuccessful tranfers
 2.  contact rate: perc of customer contacts
