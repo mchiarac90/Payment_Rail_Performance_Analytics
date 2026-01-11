@@ -1,0 +1,107 @@
+WITH speed_metrics AS (
+---CTE: Calculate % of successful transfers delivered on time
+    SELECT
+        speed_ext.target_currency AS target_currency,
+        NULLIF(COUNT(DISTINCT CASE 
+            WHEN ((UPPER(CASE
+                WHEN speed_acc.ACC_DELIVERED_AT_RFC LIKE '_.%' AND CAST(LEFT(speed_acc.ACC_DELIVERED_AT_RFC, 1) AS INTEGER) <= 6 THEN 'Early/Ontime'
+                WHEN speed_acc.ACC_DELIVERED_AT_RFC NOT LIKE '_.%' OR CAST(LEFT(speed_acc.ACC_DELIVERED_AT_RFC, 1) AS INTEGER) > 6 THEN 'Delayed'
+                ELSE NULL END) = 'EARLY/ONTIME') 
+            AND speed_acc.TRANSFERRED_TIME IS NOT NULL 
+            THEN speed_acc.TRANSFER_ID ELSE NULL END), 0) * 100)
+        / 
+        NULLIF(COUNT(DISTINCT CASE 
+            WHEN speed_acc.ACC_MATCH_AT_RFC IS NOT NULL 
+            AND speed_acc.TRANSFERRED_TIME IS NOT NULL 
+            THEN speed_acc.TRANSFER_ID ELSE NULL END), 0) AS ontime_ratio_rfc_del
+    FROM transfer_history AS estimation_history
+    LEFT JOIN estimator_accuracy AS speed_acc 
+        ON estimation_history.transfer_id = speed_acc.TRANSFER_ID
+    LEFT JOIN transfer_lifecycle AS speed_ext 
+        ON estimation_history.transfer_id = speed_ext.transfer_id
+    LEFT JOIN speed_estimator_sla AS speed_sla 
+        ON speed_sla.TRANSFER_ID = estimation_history.transfer_id
+    WHERE UPPER(estimation_history.current_state) = 'TRANSFERRED'
+      AND (UPPER(estimation_history.payout_channel) <> 'Internal_wallet' OR estimation_history.payout_channel IS NOT NULL)
+      AND estimation_history.is_balance_incoming_deposit = 0
+      AND UPPER(speed_ext.target_currency) IN ('BAM', 'SAR', 'MKD')
+      -- Optimized using BETWEEN for the previous month
+      AND COALESCE(speed_sla.delivered_cutoff_time_at_rfc, speed_sla.transferred_estimated_time_at_rfc) 
+          BETWEEN DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') 
+          AND (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 second')
+    GROUP BY 1
+),
+
+payout_summary AS (
+--- CTE: Calculate % of transfers delivered sucessfully
+    SELECT
+        payout_records.PAYOUT_CURRENCY_CODE AS payout_currency_code,
+        CAST((SUM(CASE WHEN payout_records.PAYOUT_STATE IN ('REJECTED', 'BOUNCED_BACK') THEN 1 ELSE 0 END) * 100.0) / 
+             NULLIF(SUM(CASE WHEN payout_records.PAYOUT_STATE IN ('TRANSFERRED', 'REJECTED', 'BOUNCED_BACK') THEN 1 ELSE 0 END), 0) AS DECIMAL(10, 2)) AS rejection_rate
+    FROM payout_records 
+    WHERE payout_records.DATE_CREATED 
+          BETWEEN DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') 
+          AND (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 second')
+      AND UPPER(payout_records.PAYOUT_CURRENCY_CODE) IN ('BAM', 'SAR', 'MKD')
+      AND UPPER(payout_records.PAYOUT_STATE) IN ('BOUNCED_BACK', 'TRANSFERRED', 'REJECTED')
+    GROUP BY 1
+),
+
+contact_metrics AS (
+--- CTE: Calculate % of contacts and number of contacts
+    SELECT
+        all_transfers.TRANSFER__TARGET_CURRENCY AS target_currency,
+        COUNT(DISTINCT all_transfers.TRANSFER__ID) AS total_transfer_count,
+CAST((COALESCE(SUM(CASE WHEN all_transfers.CONTACT__UNIFIED_LABEL_TIER_TWO IN ('last_mile', 'payout_processing')
+                  THEN all_transfers.TRANSFER__CONTACT_COUNT ELSE 0 END), 0) * 100.0) / 
+             NULLIF(COUNT(DISTINCT all_transfers.TRANSFER__ID), 0) AS DECIMAL(10, 2)) AS contact_rate,
+        COALESCE(SUM(CASE WHEN all_transfers.CONTACT__UNIFIED_LABEL_TIER_TWO IN ('last_mile', 'payout_processing')
+                  THEN all_transfers.TRANSFER__CONTACT_COUNT ELSE 0 END), 0) AS total_payout_contact_count, 
+    FROM contact_records_all_transfers AS all_transfers
+    WHERE all_transfers.TRANSFER__DATE_CREATED 
+          BETWEEN DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') 
+          AND (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 second')
+      AND UPPER(all_transfers.TRANSFER__TARGET_CURRENCY) IN ('BAM', 'SAR', 'MKD')
+    GROUP BY 1
+),
+
+defect_metrics AS (
+--- CTE: Calculate number of rejected transfers that required at least one manual touchpoint
+    SELECT  
+        currency_code,  
+        COUNT(DISTINCT transfer_id) AS total_rejections
+    FROM frictions 
+    WHERE friction_process_type = 'payout'
+      AND currency_code IN ('BAM', 'SAR', 'MKD') 
+      AND CAST(transfer_submitted_at AS DATE) BETWEEN DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') 
+      AND (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 second')
+      AND state = 'unsuccessful
+      AND friction_name = 'manual_resolution'
+    GROUP BY 1
+),
+
+oncall_hours AS (
+--- CTE: Calculate total oncall hours
+    SELECT  
+        fields:aggregatetimespent / 3600.0 AS time_spent_in_hours,
+        CAST(COALESCE(fields:customfield.value, fields:customfield1[0].value) AS VARCHAR) AS currency
+    FROM jira_issues
+    WHERE CAST(fields:project:key AS VARCHAR) = 'MM'
+      AND UPPER(fields:status:name) IN ('RELEASED')
+      AND fields:created BETWEEN (CURRENT_DATE - INTERVAL '1 month') AND CURRENT_TIMESTAMP
+)
+
+-- Final Aggregated Report
+SELECT 
+    dm.currency_code,
+    dm.total_rejections, 
+    ps.rejection_rate  AS rejection_rate, 
+    cm.contact_rate AS contact_rate, 
+    sm.ontime_ratio_rfc_del AS speed_accuracy_score, 
+    cm.total_payout_contact_count AS contact_volume
+FROM defect_metrics dm
+INNER JOIN payout_summary ps ON dm.currency_code = ps.payout_currency_code
+INNER JOIN speed_metrics sm ON dm.currency_code = sm.target_currency
+INNER JOIN contact_metrics cm ON dm.currency_code = cm.target_currency
+LEFT JOIN oncall_hours oh ON dm.currency_code = oh.currency
+ORDER BY 1;
