@@ -6,5 +6,4 @@
 3.  speed accuracy rate: perc of successful transfers delivered according prestablished schedule
 4.  contact volume: number of customer contacts
 5.  manual case volume: number of manual resolutions
-6.  on-call hours: number of hours spent on on-call tickets
-    
+6.  on-call hours: number of hours spent on on-call tickets 
