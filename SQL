@@ -33,7 +33,7 @@ WITH speed_metrics AS (
 ),
 
 payout_summary AS (
---- CTE: Calculate % of transfers delivered sucessfully
+--- CTE: Calculate % of transfers delivered successfully
     SELECT
         payout_records.PAYOUT_CURRENCY_CODE AS payout_currency_code,
         CAST((SUM(CASE WHEN payout_records.PAYOUT_STATE IN ('REJECTED', 'BOUNCED_BACK') THEN 1 ELSE 0 END) * 100.0) / 
@@ -83,12 +83,11 @@ defect_metrics AS (
 oncall_hours AS (
 --- CTE: Calculate total oncall hours
     SELECT  
-        fields:aggregatetimespent / 3600.0 AS time_spent_in_hours,
-        CAST(COALESCE(fields:customfield.value, fields:customfield1[0].value) AS VARCHAR) AS currency
+        aggregate_timespent / 3600.0 AS time_spent_in_hours,
+        CAST(COALESCE(customfield, ccy_code) AS VARCHAR) AS currency
     FROM jira_issues
-    WHERE CAST(fields:project:key AS VARCHAR) = 'MM'
-      AND UPPER(fields:status:name) IN ('RELEASED')
-      AND fields:created BETWEEN (CURRENT_DATE - INTERVAL '1 month') AND CURRENT_TIMESTAMP
+    WHERE UPPER(status) IN ('RELEASED')
+      AND created BETWEEN (CURRENT_DATE - INTERVAL '1 month') AND CURRENT_TIMESTAMP
 )
 
 -- Final Aggregated Report
@@ -99,6 +98,7 @@ SELECT
     sm.ontime_ratio_rfc_del AS speed_accuracy_rate, 
     cm.total_payout_contact_count AS contact_volume,
     dm.manual_case_volume, 
+    oh.time_spent_in_hours as on_call_hours
 FROM defect_metrics dm
 INNER JOIN payout_summary ps ON dm.currency_code = ps.payout_currency_code
 INNER JOIN speed_metrics sm ON dm.currency_code = sm.target_currency
