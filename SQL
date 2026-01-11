@@ -69,14 +69,14 @@ defect_metrics AS (
 --- CTE: Calculate number of rejected transfers that required at least one manual touchpoint
     SELECT  
         currency_code,  
-        COUNT(DISTINCT transfer_id) AS total_rejections
+        COUNT(DISTINCT transfer_id) AS manual_case_volume
     FROM frictions 
     WHERE friction_process_type = 'payout'
       AND currency_code IN ('BAM', 'SAR', 'MKD') 
       AND CAST(transfer_submitted_at AS DATE) BETWEEN DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') 
       AND (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 second')
       AND state = 'unsuccessful
-      AND friction_name = 'manual_resolution'
+      AND friction_name = 'manual'
     GROUP BY 1
 ),
 
@@ -94,11 +94,11 @@ oncall_hours AS (
 -- Final Aggregated Report
 SELECT 
     dm.currency_code,
-    dm.total_rejections, 
     ps.rejection_rate  AS rejection_rate, 
     cm.contact_rate AS contact_rate, 
-    sm.ontime_ratio_rfc_del AS speed_accuracy_score, 
-    cm.total_payout_contact_count AS contact_volume
+    sm.ontime_ratio_rfc_del AS speed_accuracy_rate, 
+    cm.total_payout_contact_count AS contact_volume,
+    dm.manual_case_volume, 
 FROM defect_metrics dm
 INNER JOIN payout_summary ps ON dm.currency_code = ps.payout_currency_code
 INNER JOIN speed_metrics sm ON dm.currency_code = sm.target_currency
